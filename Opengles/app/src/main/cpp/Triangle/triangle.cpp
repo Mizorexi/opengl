@@ -1,5 +1,6 @@
+#include <jni.h>
+#include <string>
 #include "triangle.h"
-#include "MyLog.h"
 
 #define LOGI(...) MyLog::logi(__VA_ARGS__)
 #define LOGD(...) MyLog::logd(__VA_ARGS__)
@@ -14,113 +15,205 @@
         } \
     } while (0)
 
-Triangle::Triangle(){
+typedef struct
+{
+   // Handle to a program object
+   GLuint programObject;
 
-}
+} UserData;
 
-Triangle::initOpengl(){
-    //获取EGLDisplay
-    EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if(display == EGL_NO_DISPLAY){
-        return -1;
-    }
+const char *vertexShaderSource =
+    "attribute vec4 vPosition;\n"
+    "void main() {\n"
+    "  gl_Position = vPosition;\n"
+    "}\n";
 
-    //获取EGL版本
-    EGLint major, minor;
-    eglInitialize(display, &major, &minor);
-    LOGI("EGL version: %d.%d", major, minor);
-
-    //初始化EGL
-    EGLint attribs[] = {
-        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3BIT_KHR,
-        EGL_RED_SIZE, 8,
-        EGL_GREEN_SIZE, 8,
-        EGL_BLUE_SIZE, 8,
-        EGL_DEPTH_SIZE, 1,
-        EGL_NONE
-    }
-
-    //获取EGLConfig
-    const EGLint Max_configs = 2;
-    EGLConfig configs[Max_configs];
-    EGLint num_configs;
-    eglChooseConfig(display, attribs, configs, Max_configs, &num_configs);
-    checkGlError("eglChooseConfig");
-
-    //创建EGLSurface
-    EGLSurface window;
-    window = eglCreateWindowSurface(display, configs[0], m_nativeWindow , NULL);
-    checkGlError("eglCreateWindowSurface");
-    if(surface == EGL_NO_SURFACE){
-        return -1;
-    }
-
-    //创建上下文
-    EGLint attrib_list[]={
-        EGL_CONTEXT_CLIENT_VERSION, 3,
-        EGL_NONE
-    }
-
-    EGLContext context = eglCreateContext(display, configs[0], EGL_NO_CONTEXT, attrib_list);
-    checkGlError("eglCreateContext");
-    if(context == EGL_NO_CONTEXT){
-        return -1;
-    }
-    
-    eglMakeCurrent(display, window, window, context);
-    checkGlError("eglMakeCurrent");
-
-    return 0;
-}
+const char *fragmentShaderSource =
+    "precision mediump float;\n"
+    "void main() {\n"
+    "  gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);\n"
+    "}\n";
 
 //加载着色器
-int Triangle::loadShader(int type,const char **shadercode){
+int loadShader(int type, const char *shadercode){
     int shader = glCreateShader(type);
-    glShaderSource(shader, 1, shadercode, NULL);
+    if (shader == 0) {
+        LOGE("Failed to create shader of type %d", type);
+        return 0;
+    }
+    
+    glShaderSource(shader, 1, &shadercode, NULL);
     glCompileShader(shader);
 
-    int *compileParams = new int[1];
-    glGetShaderiv(shader,GL_COMPILE_STATUS,compileParams);
-    if(compileParams[0] == GL_FALSE){
+    int compileStatus;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compileStatus);
+    if (compileStatus == GL_FALSE) {
+        GLint infoLen = 0;
+        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &infoLen);
+        if (infoLen > 1) {
+            char* infoLog = new char[infoLen];
+            glGetShaderInfoLog(shader, infoLen, NULL, infoLog);
+            LOGE("Error compiling shader:\n%s\n", infoLog);
+            delete[] infoLog;
+        }
         glDeleteShader(shader);
-        shader = 0;
+        return 0;
     }
-    delete[] compileParams;
-    compileParams = nullptr;
-
+    
     return shader;
 }
 
 //创建和链接程序
-int Triangle::createProgram(const char *vShaderStr,const char *fShaderStr){
-    int vShader = loadShaer(GL_VERTEX_SHADER, vertextSource);
-    if(vShader == 0){
-        return 0;
-    }
-    int fShader = loadShader(GL_FRAGMENT_SHADER, fragmentSource);
-    if(fShader == 0){
-        return 0;
+int createProgram(ESContext *esContext, const char *vShaderStr, const char *fShaderStr) {
+    UserData* userData = (UserData*)esContext->userData;
+    
+    LOGE("开始创建着色器程序");
+    
+    // 创建着色器
+    GLuint vertexShader = loadShader(GL_VERTEX_SHADER, vShaderStr);
+    if (!vertexShader) {
+        LOGE("顶点着色器创建失败");
+        return GL_FALSE;
     }
     
-    int program = glCreateProgram();
-    if(program != 0){
-        glAttachShader(program, vShader);
-        checkGlError("glAttachShader");
-
-        glAttachShader(program, fShader);
-        checkGlError("glAttachShader");
-
-        glLinkProgram(program);
-
-        int *linkParams = new int[1];
-        glGetProgramiv(program,GL_LINK_STATUS,linkParams);
-        if(linkParams[0] == GL_FALSE){
-            glDeleteProgram(program);
-            program = 0;
-        }
-        delete[] linkParams;
-        linkParams = nullptr;
+    GLuint fragmentShader = loadShader(GL_FRAGMENT_SHADER, fShaderStr);
+    if (!fragmentShader) {
+        LOGE("片段着色器创建失败");
+        glDeleteShader(vertexShader);
+        return GL_FALSE;
     }
-    return program;
+    
+    // 创建程序
+    GLuint program = glCreateProgram();
+    if (!program) {
+        LOGE("程序对象创建失败");
+        glDeleteShader(vertexShader);
+        glDeleteShader(fragmentShader);
+        return GL_FALSE;
+    }
+    
+    // 附加着色器
+    glAttachShader(program, vertexShader);
+    glAttachShader(program, fragmentShader);
+    
+    // 链接程序
+    glLinkProgram(program);
+    
+    // 检查链接状态
+    GLint linked;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    
+    if (!linked) {
+        GLint infoLen = 0;
+        glGetProgramiv(program, GL_INFO_LOG_LENGTH, &infoLen);
+        
+        if (infoLen > 1) {
+            char* infoLog = (char*)malloc(sizeof(char) * infoLen);
+            glGetProgramInfoLog(program, infoLen, NULL, infoLog);
+            LOGE("链接程序失败: %s", infoLog);
+            free(infoLog);
+        }
+        
+        glDeleteProgram(program);
+        glDeleteShader(vertexShader);
+        glDeleteShader(fragmentShader);
+        return GL_FALSE;
+    }
+    
+    // 存储程序对象
+    userData->programObject = program;
+    
+    // 清理
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+    
+    LOGE("着色器程序创建成功: ID=%d", program);
+    return GL_TRUE;
+}
+
+void Draw(ESContext *esContext){
+    LOGE("Draw开始执行");
+    
+    // 检查OpenGL上下文是否有效
+    if (!eglGetCurrentContext()) {
+        LOGE("没有有效的OpenGL上下文");
+        return;
+    }
+    
+    UserData *userData = (UserData *)esContext->userData;
+    if (!userData || !userData->programObject) {
+        LOGE("无效的userData或programObject: %p, program: %d", 
+             userData, userData ? userData->programObject : 0);
+        return;
+    }
+    
+    // 设置明显的背景颜色，改为黑色以便更容易看到红色三角形
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);  // 黑色背景
+    glClear(GL_COLOR_BUFFER_BIT);
+    
+    // 检查OpenGL错误
+    GLenum error = glGetError();
+    if (error != GL_NO_ERROR) {
+        LOGE("清除缓冲区后OpenGL错误: 0x%04X", error);
+    }
+    
+    // 设置视口
+    glViewport(0, 0, esContext->width, esContext->height);
+    
+    // 使用着色器程序
+    glUseProgram(userData->programObject);
+    error = glGetError();
+    if (error != GL_NO_ERROR) {
+        LOGE("glUseProgram后OpenGL错误: 0x%04X", error);
+    }
+    
+    // 准备顶点数据
+    GLfloat vVertices[] = {
+        0.0f, 0.5f, 0.0f,
+        -0.5f, -0.5f, 0.0f,
+        0.5f, -0.5f, 0.0f
+    };
+    
+    // 设置顶点属性
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, vVertices);
+    error = glGetError();
+    if (error != GL_NO_ERROR) {
+        LOGE("glVertexAttribPointer后OpenGL错误: 0x%04X", error);
+    }
+    
+    glEnableVertexAttribArray(0);
+    error = glGetError();
+    if (error != GL_NO_ERROR) {
+        LOGE("glEnableVertexAttribArray后OpenGL错误: 0x%04X", error);
+    }
+    
+    // 绘制三角形
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    error = glGetError();
+    if (error != GL_NO_ERROR) {
+        LOGE("glDrawArrays后OpenGL错误: 0x%04X", error);
+    }
+    
+    // 交换缓冲区
+    EGLBoolean swapResult = eglSwapBuffers(esContext->eglDisplay, esContext->eglSurface);
+    if (!swapResult) {
+        LOGE("eglSwapBuffers失败: 0x%04X", eglGetError());
+    } else {
+        LOGE("缓冲区交换成功");
+    }
+}
+
+void Shutdown(ESContext *esContext){
+    UserData *userData = (UserData *)esContext->userData;
+    glDeleteProgram(userData->programObject);
+}
+
+int esMain(ESContext *esContext){
+    LOGE("esMain");
+    esContext->userData = malloc(sizeof(UserData));
+    esCreateWindow(esContext , "Hello triangle", 400, 400, ES_WINDOW_RGB);
+    createProgram(esContext,vertexShaderSource, fragmentShaderSource);
+    esRegisterDrawFunc(esContext, Draw);
+    esRegisterShutdownFunc(esContext, Shutdown);
+    return GL_TRUE;
 }

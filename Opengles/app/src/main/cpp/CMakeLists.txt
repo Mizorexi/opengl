@@ -14,6 +14,9 @@ project("opengles")
 # You can define multiple libraries, and CMake builds them for you.
 # Gradle automatically packages shared libraries with your APK.
 
+include_directories(CommonTools)
+include_directories(Triangle)
+
 add_library( # Sets the name of the library.
         opengles
 
@@ -21,6 +24,8 @@ add_library( # Sets the name of the library.
         SHARED
 
         # Provides a relative path to your source file(s).
+        CommonTools/esUtils.cpp
+        Triangle/triangle.cpp
         native-lib.cpp)
 
 # Searches for a specified prebuilt library and stores the path as a
@@ -39,10 +44,17 @@ find_library( # Sets the name of the path variable.
 # Specifies libraries CMake should link to your target library. You
 # can link multiple libraries, such as libraries you define in this
 # build script, prebuilt third-party libraries, or system libraries.
+find_library(GLESv3-lib GLESv3)
+find_library(EGL-lib EGL)
+
 
 target_link_libraries( # Specifies the target library.
         opengles
 
         # Links the target library to the log library
         # included in the NDK.
-        ${log-lib})
+        android
+        ${log-lib}
+        ${GLESv3-lib}
+        ${EGL-lib}
+        )
